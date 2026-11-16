@@ -1,0 +1,25 @@
+Copyright (c) 2026 Dhruv Khemka. All rights reserved.
+
+The source code in this repository is published so that it can be read. It is
+not open source.
+
+Without prior written permission from the copyright holder, you may not copy,
+modify, merge, publish, distribute, sublicense, sell, or otherwise use this
+software or any part of it, except to view it and to use the Huddle website
+as it is offered to visitors.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHOR OR COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+Third-party code
+
+The files in vendor/rnnoise are from @sapphi-red/web-noise-suppressor. They
+are not covered by the notice above. They remain under their own MIT licence,
+included at vendor/rnnoise/LICENSE.
