@@ -14,6 +14,14 @@
 // person with the lowest join number takes over: they become the host and
 // re-open the door so new people can still get in.
 
+// If the browser paired this script with an older cached copy of the page,
+// reload once to fetch the matching page rather than break.
+if (!document.getElementById('aloneInvite')) {
+  let tried = false;
+  try { tried = sessionStorage.getItem('huddle-reloaded') === '1'; sessionStorage.setItem('huddle-reloaded', '1'); } catch { tried = true; }
+  if (!tried) location.reload();
+}
+
 const PREFIX = 'huddle-v2-';
 const MAX_FILE = 25 * 1024 * 1024; // largest file you can share in chat
 const $ = (id) => document.getElementById(id);
@@ -90,9 +98,14 @@ function store(key, val) {
 const S = {
   peer: null,         // my connection to everyone in the call
   door: null,         // the room's door, held only while I am the host
-  local: null,        // what I send: camera + (possibly filtered) mic
+  local: null,        // what I send: one video and one audio track, real or placeholder
+  blankVideo: null,   // placeholder sent while the camera is off
+  silentAudio: null,  // placeholder sent until the mic is first turned on
+  camTrack: null,     // the camera, only while it is on
   rawMic: null,       // the microphone track before any filtering
   rawMicNS: null,     // whether rawMic was opened with the browser's noise suppression
+  micBusy: false,
+  camBusy: false,
   screen: null,       // screen-share stream while sharing
   room: null,
   host: false,
@@ -103,10 +116,8 @@ const S = {
   stage: 'finding',   // finding -> knocking -> calling, or failed
   failedKnocks: new Set(),
   name: '',
-  mic: true,
-  cam: true,
-  hasMic: false,
-  hasCam: false,
+  mic: false,         // everyone joins with mic and camera off
+  cam: false,
   q: cleanQ({ video: load('huddle-q-video'), audio: load('huddle-q-audio') }),
   ns: ['off', 'standard', 'strong'].includes(load('huddle-ns')) ? load('huddle-ns') : 'standard',
   peers: new Map(),   // peerId -> { conn, call, name, seq, q, mic, cam, screen, tile, greeted, localMuted, localHidden }
@@ -182,29 +193,59 @@ const micConstraints = () => ({
   noiseSuppression: S.ns === 'standard',
 });
 
-async function getMedia() {
-  let stream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
-      audio: micConstraints(),
-    });
-  } catch {
-    try { stream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints() }); }
-    catch { stream = new MediaStream(); }
+// You join with mic and camera off, and nothing is captured: the call starts
+// with a blank video track and a silent audio track. The real camera and mic
+// are opened only when you switch them on, and swapped in without redialling.
+function makeLocalStream() {
+  S.blankVideo = blankVideoTrack();
+  S.silentAudio = silentAudioTrack();
+  S.mic = false;
+  S.cam = false;
+  return new MediaStream([S.blankVideo, S.silentAudio]);
+}
+
+// Opens the microphone (or re-opens it with different settings).
+async function openMic() {
+  const fresh = await navigator.mediaDevices.getUserMedia({ audio: micConstraints() });
+  const old = S.rawMic;
+  S.rawMic = fresh.getAudioTracks()[0];
+  S.rawMic.contentHint = 'speech';
+  S.rawMicNS = S.ns === 'standard';
+  old?.stop();
+}
+
+// Builds what we actually send from the raw mic, depending on the noise filter.
+async function applyMicPipeline() {
+  teardownStrongFilter();
+  let out = S.rawMic;
+  if (S.ns === 'strong') {
+    try {
+      out = await buildStrongFilter(S.rawMic);
+    } catch (err) {
+      console.warn('Strong noise filter failed:', err);
+      toast('Strong filter is not available here. Using standard.');
+      S.ns = 'standard';
+      store('huddle-ns', S.ns);
+      paintSettings();
+      try { await openMic(); } catch { /* keep the mic we have */ }
+      out = S.rawMic;
+    }
   }
-  stream.getVideoTracks().forEach((t) => (t.contentHint = 'motion'));
-  stream.getAudioTracks().forEach((t) => (t.contentHint = 'speech'));
-  S.hasCam = stream.getVideoTracks().length > 0;
-  S.hasMic = stream.getAudioTracks().length > 0;
-  S.rawMic = stream.getAudioTracks()[0] || null;
-  S.rawMicNS = S.hasMic ? S.ns === 'standard' : null;
-  // Every call needs one audio and one video track, so fill gaps with placeholders.
-  if (!S.hasCam) stream.addTrack(blankVideoTrack());
-  if (!S.hasMic) stream.addTrack(silentAudioTrack());
-  S.cam = S.hasCam;
-  S.mic = S.hasMic;
-  return stream;
+  setOutgoingAudio(out);
+}
+
+// Puts a video track (camera or the blank placeholder) into what we send.
+function swapLocalVideo(track) {
+  S.local.getVideoTracks().forEach((t) => S.local.removeTrack(t));
+  S.local.addTrack(track);
+  if (S.screen) return; // the screen share stays on top until it stops
+  replaceOutgoingVideo(track);
+  const v = selfTile()?.querySelector('video');
+  if (v) {
+    v.srcObject = null; // some browsers only notice a new track on reassignment
+    v.srcObject = S.local;
+    v.play().catch(() => {});
+  }
 }
 
 // What we send to others: the camera, or the screen while sharing.
@@ -267,39 +308,20 @@ function setOutgoingAudio(track) {
 }
 
 async function setNoiseFilter(level, quiet = false) {
-  if (!S.hasMic) { if (!quiet) toast('No microphone found'); return; }
   S.ns = level;
   store('huddle-ns', level);
   paintSettings();
 
-  // Re-open the mic if the browser's own filter needs switching on or off.
-  const wantBrowserNS = level === 'standard';
-  if (S.rawMicNS !== wantBrowserNS) {
-    let fresh;
-    try { fresh = await navigator.mediaDevices.getUserMedia({ audio: micConstraints() }); }
-    catch { toast('Could not change the microphone setting'); return; }
-    const old = S.rawMic;
-    S.rawMic = fresh.getAudioTracks()[0];
-    S.rawMic.contentHint = 'speech';
-    S.rawMicNS = wantBrowserNS;
-    teardownStrongFilter();
-    setOutgoingAudio(S.rawMic);
-    old?.stop();
-  }
-
-  teardownStrongFilter();
-  if (level === 'strong') {
-    try {
-      setOutgoingAudio(await buildStrongFilter(S.rawMic));
-    } catch (err) {
-      console.warn('Strong noise filter failed:', err);
-      toast('Strong filter is not available here. Using standard.');
-      return setNoiseFilter('standard', true);
+  // If the mic has never been turned on, the choice simply waits until it is.
+  if (S.rawMic) {
+    // Re-open the mic if the browser's own filter needs switching on or off.
+    if (S.rawMicNS !== (level === 'standard')) {
+      try { await openMic(); }
+      catch { toast('Could not change the microphone setting'); return; }
     }
-  } else {
-    setOutgoingAudio(S.rawMic);
+    await applyMicPipeline();
   }
-  if (!quiet) toast({ off: 'Noise filter off', standard: 'Standard noise filter', strong: 'Strong noise filter on' }[level]);
+  if (!quiet) toast({ off: 'Noise filter off', standard: 'Standard noise filter', strong: 'Strong noise filter on' }[S.ns]);
 }
 
 /* ---------- quality ---------- */
@@ -452,6 +474,9 @@ function layout() {
   let cols = Math.ceil(Math.sqrt(n));
   if (n === 2) cols = wide ? 2 : 1;
   grid.style.setProperty('--cols', Math.max(cols, 1));
+  // On a phone, a two-person call shows the other person full size with your
+  // own picture small in the corner.
+  grid.classList.toggle('duo', n === 2 && window.matchMedia('(max-width: 760px)').matches);
 }
 
 function paintSelf() {
@@ -920,7 +945,7 @@ function updateStatus() {
   const n = [...S.peers.values()].filter((e) => e.tile).length;
   let text;
   if (n > 0) text = `${n + 1} in call`;
-  else if (S.host) text = 'Waiting for others. Share the invite link.';
+  else if (S.host) text = 'Waiting for others';
   else text = {
     knocking: 'Reaching the host…',
     calling: 'Connecting to the others…',
@@ -928,6 +953,8 @@ function updateStatus() {
   }[S.stage] || 'Finding the room…';
   $('status').textContent = text;
   $('status').classList.toggle('bad', n === 0 && !S.host && S.stage === 'failed');
+  // Alone in a room you host: show the invite card.
+  $('alone').hidden = !(n === 0 && S.host);
 }
 
 /* ---------- live latency readout ---------- */
@@ -968,24 +995,76 @@ function broadcastState() {
 }
 
 function paintControls() {
+  // Each label says what pressing the button will do.
+  const set = (btn, label, text) => {
+    $(label).textContent = text;
+    $(btn).title = text;
+    $(btn).setAttribute('aria-label', text);
+  };
   $('toggleMic').classList.toggle('off', !S.mic);
+  set('toggleMic', 'micLabel', S.mic ? 'Mute' : 'Unmute');
   $('toggleCam').classList.toggle('off', !S.cam);
+  set('toggleCam', 'camLabel', S.cam ? 'Stop video' : 'Start video');
   $('toggleScreen').classList.toggle('on', !!S.screen);
+  set('toggleScreen', 'screenLabel', S.screen ? 'Stop sharing' : 'Share');
 }
 
-function setMic(on) {
-  if (!S.hasMic) return toast('No microphone found');
-  S.mic = on;
-  S.local.getAudioTracks().forEach((t) => (t.enabled = S.mic));
-  broadcastState();
+// Mic: opened the first time you unmute, then kept open and simply silenced
+// while muted, so unmuting is instant and doesn't clip your first word.
+async function setMic(on) {
+  if (S.micBusy || !S.local) return;
+  S.micBusy = true;
+  try {
+    if (on && !S.rawMic) {
+      try { await openMic(); }
+      catch { toast('Microphone is blocked or missing. Check the browser permission.'); return; }
+      if (!S.local) { S.rawMic.stop(); S.rawMic = null; return; } // left while the prompt was open
+      S.mic = true;
+      await applyMicPipeline();
+    } else {
+      S.mic = on;
+      S.local.getAudioTracks().forEach((t) => (t.enabled = S.mic));
+    }
+    broadcastState();
+  } finally {
+    S.micBusy = false;
+  }
 }
 const toggleMic = () => setMic(!S.mic);
 
-function setCam(on) {
-  if (!S.hasCam) return toast('No camera found');
-  S.cam = on;
-  S.local.getVideoTracks().forEach((t) => (t.enabled = S.cam));
-  broadcastState();
+// Camera: fully released when off, so the camera light goes out.
+async function setCam(on) {
+  if (S.camBusy || !S.local) return;
+  S.camBusy = true;
+  try {
+    if (on) {
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 }, facingMode: 'user' },
+        });
+      } catch {
+        toast('Camera is blocked or missing. Check the browser permission.');
+        return;
+      }
+      const track = stream.getVideoTracks()[0];
+      if (!S.local) { track.stop(); return; } // left while the prompt was open
+      track.contentHint = 'motion';
+      track.onended = () => { if (S.camTrack === track) setCam(false); }; // unplugged or revoked
+      S.camTrack = track;
+      S.cam = true;
+      swapLocalVideo(track);
+    } else {
+      S.cam = false;
+      swapLocalVideo(S.blankVideo);
+      S.camTrack?.stop();
+      S.camTrack = null;
+    }
+    broadcastState();
+    tuneSenders();
+  } finally {
+    S.camBusy = false;
+  }
 }
 const toggleCam = () => setCam(!S.cam);
 
@@ -1246,9 +1325,9 @@ async function enterRoom(code) {
   S.failedKnocks.clear();
   $('landingError').hidden = true;
 
-  // Fetch relay passwords while the camera starts, so joining is no slower.
-  [S.local] = await Promise.all([getMedia(), loadRelay()]);
-  if (!S.hasCam && !S.hasMic) toast('No camera or mic access. You can still watch and chat.');
+  // You join with mic and camera off. Nothing is captured until you turn one on.
+  S.local = makeLocalStream();
+  await loadRelay();
 
   window.HuddleFx?.stop(); // no landing animation during a call
   $('landing').hidden = true;
@@ -1261,8 +1340,8 @@ async function enterRoom(code) {
   paintControls();
   paintSettings();
   updateStatus();
-  if (S.ns === 'strong' && S.hasMic) setNoiseFilter('strong', true);
   startNetwork();
+  toast('Your mic and camera are off');
 }
 
 function leave() {
@@ -1281,8 +1360,14 @@ function leave() {
   S.rawMic?.stop();
   S.rawMic = null;
   S.rawMicNS = null;
+  S.camTrack?.stop();
+  S.camTrack = null;
+  S.blankVideo?.stop();
+  S.silentAudio?.stop();
   S.local?.getTracks().forEach((t) => t.stop());
   S.local = null;
+  S.mic = false;
+  S.cam = false;
   S.meters.clear();
   S.files.clear();
   S.host = false;
@@ -1294,6 +1379,9 @@ function leave() {
   $('unread').hidden = true;
   $('chat').hidden = true;
   $('room').hidden = true;
+  // Back on the homepage you can start a new room again, not only rejoin.
+  $('newRoom').hidden = false;
+  $('inviteNote').hidden = true;
   $('landing').hidden = false;
   window.HuddleFx?.start();
   history.replaceState(null, '', location.pathname);
@@ -1351,12 +1439,20 @@ document.querySelectorAll('#settings [data-set]').forEach((b) => {
   };
 });
 
-$('copyLink').onclick = () => {
+// On a phone this opens the share sheet (WhatsApp, Messages, …); elsewhere it
+// copies the link.
+async function invite() {
   const link = `${location.origin}${location.pathname}?room=${encodeURIComponent(S.room)}`;
+  if (navigator.share && window.matchMedia('(pointer: coarse)').matches) {
+    try { await navigator.share({ title: 'Huddle', text: 'Join my Huddle room', url: link }); return; }
+    catch (err) { if (err?.name === 'AbortError') return; /* otherwise fall back to copying */ }
+  }
   navigator.clipboard.writeText(link)
     .then(() => toast('Invite link copied'))
     .catch(() => prompt('Copy this invite link:', link));
-};
+}
+$('copyLink').onclick = invite;
+$('aloneInvite').onclick = invite;
 
 $('chatForm').onsubmit = (ev) => {
   ev.preventDefault();
