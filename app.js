@@ -37,13 +37,13 @@ const STUN = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com
 //
 // Calls that can go direct never use the relay.
 //
-// RELAY_URL is optional: an address that returns extra relay servers and a
-// short-lived login, for providers that work that way. Two kinds work:
-//   Metered:    https://<appname>.metered.live/api/v1/turn/credentials?apiKey=<key>
-//   Cloudflare: the address of the helper in relay/worker.js
-const RELAY_URL = '';
+// RELAY_URL is optional: the address of the Cloudflare helper in
+// relay/worker.js, which hands out short-lived relay logins. When it is set
+// and answers, calls use the Cloudflare relay only. If it is empty or down,
+// calls fall back to the Metered relay below.
+const RELAY_URL = 'https://huddle-relay.dhruvkhemka1.workers.dev/';
 
-// The relay Huddle uses: a Metered TURN credential. This login is public by
+// The fallback relay: a Metered TURN credential. This login is public by
 // design (it ships in the page), and only grants use of the relay allowance.
 // It can be deleted and replaced in the Metered dashboard at any time.
 const RELAY_LOGIN = { username: 'c406f75e7f380865a27301cc', credential: 'BGVCdbsm8SQCescO' };
@@ -61,12 +61,12 @@ async function loadRelay() {
     const res = await fetch(RELAY_URL, { signal: AbortSignal.timeout(4000) });
     if (!res.ok) throw new Error(`relay helper answered ${res.status}`);
     const data = await res.json();
-    // Metered answers with a plain list; the Cloudflare helper wraps it.
     const list = Array.isArray(data) ? data : data.iceServers;
-    if (Array.isArray(list) && list.length) iceServers = [...STUN, ...RELAY_SERVERS, ...list];
+    // Use this relay on its own, so calls don't mix two relay networks.
+    if (Array.isArray(list) && list.some((s) => s.username)) iceServers = [...STUN, ...list];
   } catch (err) {
-    // Not fatal: direct calls still work.
-    console.warn('Relay unavailable, direct calls only:', err);
+    // Not fatal: the fallback relay above stays in place.
+    console.warn('Cloudflare relay unavailable, using the fallback relay:', err);
   }
 }
 const peerOptions = () => ({ debug: 1, config: { iceServers } });
