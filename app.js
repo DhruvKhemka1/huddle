@@ -165,12 +165,22 @@ function audio() {
 
 /* ---------- media ---------- */
 
+// The camera-off placeholder. It repaints once a second so that a (black)
+// picture keeps flowing: some browsers will not start playing a person at all
+// until at least one video frame has arrived from them.
+let blankTimer;
 function blankVideoTrack() {
-  const c = Object.assign(document.createElement('canvas'), { width: 640, height: 360 });
+  const c = Object.assign(document.createElement('canvas'), { width: 320, height: 180 });
   const g = c.getContext('2d');
-  g.fillStyle = '#000';
-  g.fillRect(0, 0, c.width, c.height);
-  return c.captureStream(1).getVideoTracks()[0];
+  let flip = false;
+  const paint = () => {
+    g.fillStyle = (flip = !flip) ? '#000000' : '#010101';
+    g.fillRect(0, 0, c.width, c.height);
+  };
+  paint();
+  clearInterval(blankTimer);
+  blankTimer = setInterval(paint, 1000);
+  return c.captureStream(2).getVideoTracks()[0];
 }
 
 function silentAudioTrack() {
@@ -451,12 +461,57 @@ function addTile(id, stream, name, self = false) {
 }
 
 function setTileStream(id, tile, stream, self = false) {
+  // The <video> only shows the picture and is always silent. A person's sound
+  // plays through its own <audio> element, so it never has to wait for video.
   const v = tile.querySelector('video');
-  v.muted = self; // never play your own audio back
+  v.muted = true;
   v.srcObject = stream;
   v.play().catch(() => {});
+  if (!self) {
+    let a = tile.querySelector('audio');
+    if (!a) {
+      a = document.createElement('audio');
+      a.autoplay = true;
+      a.setAttribute('playsinline', '');
+      tile.append(a);
+    }
+    a.srcObject = new MediaStream(stream.getAudioTracks());
+    playSound(a);
+  }
   watchAudio(id, stream, tile);
 }
+
+/* ---------- making sure sound actually plays ---------- */
+
+// Browsers, iPhones especially, can refuse to start sound that was not set off
+// by a tap. When that happens we ask for one tap, and any tap or key press
+// anywhere on the page also starts whatever is waiting.
+let soundBlocked = false;
+function playSound(a) {
+  const p = a.play();
+  if (p) p.catch((err) => { if (err?.name === 'NotAllowedError') soundIsBlocked(); });
+}
+function soundIsBlocked() {
+  if (soundBlocked) return;
+  soundBlocked = true;
+  ask('Your browser is holding the sound until you tap.', 'Turn on sound', unlockSound, true, 'sound');
+}
+function unlockSound() {
+  if (!S.local) return;
+  if (S.audioCtx?.state === 'suspended') S.audioCtx.resume().catch(() => {});
+  for (const e of S.peers.values()) {
+    const a = e.tile?.querySelector('audio');
+    if (a && a.paused && a.srcObject) a.play().catch(() => {});
+    const v = e.tile?.querySelector('video');
+    if (v && v.paused && v.srcObject) v.play().catch(() => {});
+  }
+  if (soundBlocked) {
+    soundBlocked = false;
+    if (askKind === 'sound') closeAsk();
+  }
+}
+document.addEventListener('pointerdown', unlockSound, true);
+document.addEventListener('keydown', unlockSound, true);
 
 function setTileName(tile, name) {
   tile.querySelector('.name').textContent = name;
@@ -499,7 +554,8 @@ function paintPeer(id) {
 
   // "Just for me" choices. These never leave this browser.
   const v = e.tile.querySelector('video');
-  v.muted = !!e.localMuted;
+  const a = e.tile.querySelector('audio');
+  if (a) a.muted = !!e.localMuted;
   v.srcObject?.getVideoTracks().forEach((t) => (t.enabled = !e.localHidden));
   e.tile.classList.toggle('hidden-local', !!e.localHidden);
   e.tile.querySelector('.flags').textContent =
@@ -597,8 +653,9 @@ function onHostCommand(action) {
   }
 }
 
-let askTimer;
-function ask(text, yesLabel, onYes, sticky = false) {
+let askTimer, askKind = '';
+function ask(text, yesLabel, onYes, sticky = false, kind = '') {
+  askKind = kind;
   $('askText').textContent = text;
   $('askYes').textContent = yesLabel;
   $('askYes').onclick = () => { closeAsk(); onYes(); };
@@ -608,6 +665,7 @@ function ask(text, yesLabel, onYes, sticky = false) {
 }
 function closeAsk() {
   clearTimeout(askTimer);
+  askKind = '';
   $('ask').hidden = true;
 }
 
@@ -1362,6 +1420,8 @@ function leave() {
   S.rawMicNS = null;
   S.camTrack?.stop();
   S.camTrack = null;
+  clearInterval(blankTimer);
+  soundBlocked = false;
   S.blankVideo?.stop();
   S.silentAudio?.stop();
   S.local?.getTracks().forEach((t) => t.stop());
