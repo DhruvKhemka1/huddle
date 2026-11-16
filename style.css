@@ -146,6 +146,7 @@ input:focus-visible { outline: none; }
 .wordmark { font-family: var(--display); font-size: 22px; letter-spacing: -0.03em; }
 .code { font-family: var(--mono); font-size: 13px; color: var(--ink-soft); }
 .status { color: var(--ink-dim); font-size: 13px; }
+.status.bad { color: var(--down); font-weight: 600; }
 
 .stage { flex: 1; display: flex; min-height: 0; gap: 10px; padding: 0 var(--pad); }
 .grid {

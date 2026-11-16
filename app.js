@@ -18,14 +18,50 @@ const PREFIX = 'huddle-v2-';
 const MAX_FILE = 25 * 1024 * 1024; // largest file you can share in chat
 const $ = (id) => document.getElementById(id);
 
-// Optional: your own STUN/TURN servers. Calls go directly between browsers
-// whenever possible. A TURN relay is only the fallback for strict networks, so
-// if you add one, pick a region close to the callers (e.g. Mumbai) or relayed
-// calls will take a long detour. Leave null to use the PeerJS defaults.
-// Example: [{ urls: 'stun:stun.l.google.com:19302' },
-//           { urls: 'turn:your.turn.host:3478', username: '…', credential: '…' }]
-const ICE_SERVERS = null;
-const peerOptions = () => ({ debug: 1, ...(ICE_SERVERS ? { config: { iceServers: ICE_SERVERS } } : {}) });
+// How browsers find a path to each other.
+//
+// STUN servers only help two browsers discover a direct route. They carry no
+// audio or video.
+const STUN = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }];
+
+// A TURN relay is the fallback when no direct route exists (strict Wi-Fi,
+// many mobile networks). Without one, those calls cannot connect at all.
+//
+// Calls that can go direct never use the relay.
+//
+// RELAY_URL is optional: an address that returns extra relay servers and a
+// short-lived login, for providers that work that way. Two kinds work:
+//   Metered:    https://<appname>.metered.live/api/v1/turn/credentials?apiKey=<key>
+//   Cloudflare: the address of the helper in relay/worker.js
+const RELAY_URL = '';
+
+// The relay Huddle uses: a Metered TURN credential. This login is public by
+// design (it ships in the page), and only grants use of the relay allowance.
+// It can be deleted and replaced in the Metered dashboard at any time.
+const RELAY_LOGIN = { username: 'c406f75e7f380865a27301cc', credential: 'BGVCdbsm8SQCescO' };
+const RELAY_SERVERS = [
+  'turn:global.relay.metered.ca:80',
+  'turn:global.relay.metered.ca:80?transport=tcp',
+  'turn:global.relay.metered.ca:443',
+  'turns:global.relay.metered.ca:443?transport=tcp',
+].map((urls) => ({ urls, ...RELAY_LOGIN }));
+
+let iceServers = [...STUN, ...RELAY_SERVERS];
+async function loadRelay() {
+  if (!RELAY_URL) return;
+  try {
+    const res = await fetch(RELAY_URL, { signal: AbortSignal.timeout(4000) });
+    if (!res.ok) throw new Error(`relay helper answered ${res.status}`);
+    const data = await res.json();
+    // Metered answers with a plain list; the Cloudflare helper wraps it.
+    const list = Array.isArray(data) ? data : data.iceServers;
+    if (Array.isArray(list) && list.length) iceServers = [...STUN, ...RELAY_SERVERS, ...list];
+  } catch (err) {
+    // Not fatal: direct calls still work.
+    console.warn('Relay unavailable, direct calls only:', err);
+  }
+}
+const peerOptions = () => ({ debug: 1, config: { iceServers } });
 
 /* ---------- quality levels ---------- */
 
@@ -64,6 +100,8 @@ const S = {
   seq: Infinity,      // my join number (the host is 0)
   nextSeq: 1,         // next join number to hand out, while I am the host
   leaving: false,
+  stage: 'finding',   // finding -> knocking -> calling, or failed
+  failedKnocks: new Set(),
   name: '',
   mic: true,
   cam: true,
@@ -535,13 +573,13 @@ function onHostCommand(action) {
 }
 
 let askTimer;
-function ask(text, yesLabel, onYes) {
+function ask(text, yesLabel, onYes, sticky = false) {
   $('askText').textContent = text;
   $('askYes').textContent = yesLabel;
   $('askYes').onclick = () => { closeAsk(); onYes(); };
   $('ask').hidden = false;
   clearTimeout(askTimer);
-  askTimer = setTimeout(closeAsk, 20000);
+  if (!sticky) askTimer = setTimeout(closeAsk, 20000);
 }
 function closeAsk() {
   clearTimeout(askTimer);
@@ -649,7 +687,15 @@ function openDoor(takeover, attempt = 0) {
   });
   d.on('connection', (conn) => {
     // Someone is knocking. Tell them who is here, then they call everyone.
+    // If their knock never gets through, say so: it means no direct route
+    // exists between us, and it helps to know that on both ends.
+    const stuck = setTimeout(() => {
+      if (conn.open || S.failedKnocks.has(conn.peer) || S.peers.has(conn.peer)) return;
+      S.failedKnocks.add(conn.peer);
+      sysMessage('Someone tried to join but could not connect. A network between you is blocking direct calls.');
+    }, 12000);
     conn.on('open', () => {
+      clearTimeout(stuck);
       conn.send({ type: 'welcome', host: S.peer.id, peers: [S.peer.id, ...connectedIds()], seq: S.nextSeq++ });
     });
   });
@@ -668,12 +714,15 @@ function openDoor(takeover, attempt = 0) {
 
 let knockTimer;
 function knock() {
+  S.stage = 'knocking';
+  updateStatus();
   const c = S.peer.connect(doorId(), { reliable: true });
   clearTimeout(knockTimer);
-  knockTimer = setTimeout(() => { if (!S.hostPeerId) { try { c.close(); } catch {} retryDoor(); } }, 8000);
+  knockTimer = setTimeout(() => { if (!S.hostPeerId) { try { c.close(); } catch {} retryDoor(); } }, 7000);
   c.on('data', (d) => {
     if (!d || d.type !== 'welcome' || S.hostPeerId) return;
     clearTimeout(knockTimer);
+    S.stage = 'calling';
     S.hostPeerId = String(d.host);
     S.seq = Number(d.seq) || 1;
     (Array.isArray(d.peers) ? d.peers : []).forEach((pid) => connectTo(String(pid)));
@@ -685,9 +734,23 @@ function knock() {
 
 function retryDoor() {
   clearTimeout(knockTimer);
-  if (S.hostPeerId || S.leaving || !S.peer || S.knockRetries >= 3) return;
+  if (S.hostPeerId || S.leaving || !S.peer) return;
+  if (S.knockRetries >= 2) return connectionFailed(); // the host is there but unreachable
   S.knockRetries++;
   setTimeout(() => { if (!S.hostPeerId && S.peer && !S.leaving) openDoor(false); }, 1200);
+}
+
+// Joining did not work. Say why, instead of showing "Connecting" forever.
+function connectionFailed() {
+  if (S.leaving || S.stage === 'failed') return;
+  S.stage = 'failed';
+  updateStatus();
+  ask(
+    'Could not connect to this room. A network between you and the others is blocking direct calls. Trying from a different Wi-Fi or mobile data often works.',
+    'Try again',
+    () => { const code = S.room; leave(); enterRoom(code); },
+    true,
+  );
 }
 
 /* ---------- networking: host handover ---------- */
@@ -744,6 +807,15 @@ function connectTo(id) {
   setupConn(conn);
   const call = S.peer.call(id, outStream(), CALL_OPTIONS);
   if (call) setupCall(call);
+
+  // If nothing has come of it after a while, there is no route to this person.
+  setTimeout(() => {
+    const e = S.peers.get(id);
+    if (!e || e.tile || e.conn?.open || S.leaving) return;
+    removePeer(id, true);
+    if (!S.host && S.peers.size === 0) connectionFailed();
+    else toast('Could not connect to one person in the room');
+  }, 15000);
 }
 
 function setupConn(conn) {
@@ -840,13 +912,22 @@ function removePeer(id, silent = false) {
   layout();
   updateStatus();
   tuneSenders();
-  if (!S.leaving && id === S.hostPeerId) hostLeft();
+  // Only hand the host role on if we were really connected to the old host.
+  if (!S.leaving && id === S.hostPeerId && e.greeted) hostLeft();
 }
 
 function updateStatus() {
   const n = [...S.peers.values()].filter((e) => e.tile).length;
-  $('status').textContent =
-    n > 0 ? `${n + 1} in call` : S.host ? 'Waiting for others. Share the invite link.' : 'Connecting…';
+  let text;
+  if (n > 0) text = `${n + 1} in call`;
+  else if (S.host) text = 'Waiting for others. Share the invite link.';
+  else text = {
+    knocking: 'Reaching the host…',
+    calling: 'Connecting to the others…',
+    failed: 'Could not connect.',
+  }[S.stage] || 'Finding the room…';
+  $('status').textContent = text;
+  $('status').classList.toggle('bad', n === 0 && !S.host && S.stage === 'failed');
 }
 
 /* ---------- live latency readout ---------- */
@@ -1161,9 +1242,12 @@ async function enterRoom(code) {
   S.room = code;
   S.knockRetries = 0;
   S.leaving = false;
+  S.stage = 'finding';
+  S.failedKnocks.clear();
   $('landingError').hidden = true;
 
-  S.local = await getMedia();
+  // Fetch relay passwords while the camera starts, so joining is no slower.
+  [S.local] = await Promise.all([getMedia(), loadRelay()]);
   if (!S.hasCam && !S.hasMic) toast('No camera or mic access. You can still watch and chat.');
 
   window.HuddleFx?.stop(); // no landing animation during a call
