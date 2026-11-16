@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Huddle</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"></script>
+</head>
+<body>
+  <!-- Landing -->
+  <main id="landing" class="landing">
+    <div class="card">
+      <h1>Huddle</h1>
+      <p class="sub">Video calls in your browser. No accounts, no installs.</p>
+      <label for="name">Your name</label>
+      <input id="name" maxlength="30" placeholder="e.g. Sam" autocomplete="name">
+      <button id="newRoom" class="primary">Start a new room</button>
+      <div class="divider"><span>or join one</span></div>
+      <div class="row">
+        <input id="roomCode" placeholder="Room code" autocomplete="off">
+        <button id="joinRoom">Join</button>
+      </div>
+      <p id="landingError" class="error" hidden></p>
+    </div>
+  </main>
+
+  <!-- Room -->
+  <section id="room" class="room" hidden>
+    <header class="topbar">
+      <div class="room-info">
+        <strong>Huddle</strong>
+        <span id="roomLabel" class="pill"></span>
+        <span id="status" class="status">Connecting…</span>
+      </div>
+      <button id="copyLink" class="ghost">Copy invite link</button>
+    </header>
+
+    <div class="stage">
+      <div id="grid" class="grid"></div>
+      <aside id="chat" class="chat" hidden>
+        <div class="chat-head">
+          <strong>Chat</strong>
+          <button id="closeChat" class="icon-btn small" aria-label="Close chat">✕</button>
+        </div>
+        <ol id="messages" class="messages"></ol>
+        <form id="chatForm" class="chat-form">
+          <input id="chatInput" placeholder="Message everyone" autocomplete="off">
+          <button>Send</button>
+        </form>
+      </aside>
+    </div>
+
+    <footer class="controls">
+      <button id="toggleMic" class="icon-btn" title="Mute / unmute (M)">🎙️</button>
+      <button id="toggleCam" class="icon-btn" title="Camera on / off (V)">📷</button>
+      <button id="toggleScreen" class="icon-btn" title="Share screen">🖥️</button>
+      <div class="react-wrap">
+        <button id="toggleReact" class="icon-btn" title="React">😀</button>
+        <div id="reactMenu" class="react-menu" hidden>
+          <button>👍</button><button>😂</button><button>❤️</button><button>🎉</button><button>👏</button><button>🔥</button>
+        </div>
+      </div>
+      <button id="toggleChat" class="icon-btn" title="Chat">💬<span id="unread" class="badge" hidden></span></button>
+      <button id="leave" class="icon-btn danger" title="Leave call">📞</button>
+    </footer>
+  </section>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>
