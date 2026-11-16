@@ -64,26 +64,38 @@ input:focus { border-bottom-color: var(--ink); }
 input:focus-visible { outline: none; }
 
 /* ---------- Landing ---------- */
-.landing {
+html { scroll-behavior: smooth; }
+.hero {
   min-height: 100%;
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
 }
+a { color: inherit; }
+a.link { display: inline-block; }
 .land-top {
   display: flex; justify-content: space-between; gap: 16px;
   padding: var(--pad) var(--pad) 0;
   font-size: 14.5px;
 }
-.land-top .soft { text-align: right; }
+.land-top .link { font-size: 14.5px; }
 
+/* Room on the first screen for the particle figure */
+.fx-space { flex: 1; min-height: 220px; }
+
+/* The particle canvas fills the window and sits behind the page content.
+   Clicks pass straight through it. */
 .fx {
-  flex: 1;
-  width: 100%;
-  min-height: 220px;
-  display: block;
-  touch-action: pan-y;
+  position: fixed; top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  z-index: 0;
 }
+.hero, .about { position: relative; z-index: 1; }
+
+/* About blocks rise into place as they scroll into view (added by fx.js) */
+.reveal { opacity: 0; transform: translateY(22px); transition: opacity .8s ease, transform .8s ease; }
+.reveal.in { opacity: 1; transform: none; }
 
 .land-panel {
   display: flex; flex-direction: column; align-items: center;
@@ -135,6 +147,37 @@ input:focus-visible { outline: none; }
 .ticker b { color: var(--ink); font-weight: 700; margin-left: 6px; }
 .ticker i { color: var(--up); font-style: normal; margin-left: 6px; }
 @keyframes tick { to { transform: translateX(-50%); } }
+
+/* ---------- About ---------- */
+.about { border-top: 1px solid var(--line); padding: clamp(48px, 9vw, 96px) var(--pad); }
+.about-inner { max-width: 880px; margin: 0 auto; }
+.about-title {
+  margin: 0;
+  font-family: var(--display); font-weight: 400;
+  font-size: clamp(34px, 6vw, 52px); line-height: 1; letter-spacing: -0.03em;
+}
+.about-lede {
+  margin: 18px 0 0; max-width: 34em;
+  font-size: clamp(17px, 2.4vw, 21px); line-height: 1.45; color: var(--ink-soft);
+}
+.about-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 36px 48px;
+  margin: clamp(32px, 6vw, 56px) 0;
+}
+.about h3 {
+  margin: 0 0 12px;
+  font-size: 11.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.about p, .about li { font-size: 15.5px; line-height: 1.55; color: var(--ink-soft); }
+.about-grid p { margin: 0 0 12px; }
+.about-grid p:last-child { margin-bottom: 0; }
+.about ul { margin: 0; padding: 0; list-style: none; }
+.about li { padding: 9px 0; border-top: 1px solid var(--line); }
+.about li:first-child { border-top: 0; padding-top: 0; }
+.about-grid a { text-decoration-color: var(--line-strong); text-underline-offset: 4px; color: var(--ink); }
+.about-grid a:hover { text-decoration-color: var(--ink); }
 
 /* ---------- Room ---------- */
 .room { height: 100%; height: 100dvh; display: flex; flex-direction: column; }
@@ -422,6 +465,7 @@ input:focus-visible { outline: none; }
 
 @media (max-width: 760px) {
   .land-top { font-size: 13px; }
+  .about-grid { grid-template-columns: 1fr; }
   .stage { flex-direction: column; }
   .chat { width: 100%; height: 55%; }
 
@@ -459,6 +503,7 @@ input:focus-visible { outline: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
   .ticker-track { animation: none; }
   .floater { animation-duration: .01s; }
 }

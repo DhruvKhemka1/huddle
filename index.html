@@ -8,18 +8,20 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=8">
+  <link rel="stylesheet" href="style.css?v=11">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"></script>
 </head>
 <body>
   <!-- Landing -->
   <main id="landing" class="landing">
+   <canvas id="fx" class="fx" aria-hidden="true"></canvas>
+   <div class="hero">
     <header class="land-top">
       <span class="strong">Study together.</span>
-      <span class="soft">Browser to browser. Nothing in between.</span>
+      <a class="link small" href="#about">About</a>
     </header>
 
-    <canvas id="fx" class="fx" aria-hidden="true"></canvas>
+    <div id="fxSpace" class="fx-space" aria-hidden="true"></div>
 
     <section class="land-panel">
       <p id="inviteNote" class="invite" hidden>You were invited to a room.</p>
@@ -49,14 +51,14 @@
 
     <div class="ticker" aria-hidden="true">
       <div class="ticker-track">
-        <span>Servers between you and your friends <b>0</b></span>
+        <span>Calls go <b>direct</b> whenever they can</span>
         <span>Voice <b>64 kbps</b> <i>▲ 2×</i></span>
         <span>Video <b>720p</b> <i>▲ 30 fps</i></span>
         <span>Screen share <b>sharp text</b></span>
         <span>Latency <b>live on every tile</b></span>
         <span>Accounts needed <b>0</b></span>
         <span>Installs <b>0</b></span>
-        <span>Servers between you and your friends <b>0</b></span>
+        <span>Calls go <b>direct</b> whenever they can</span>
         <span>Voice <b>64 kbps</b> <i>▲ 2×</i></span>
         <span>Video <b>720p</b> <i>▲ 30 fps</i></span>
         <span>Screen share <b>sharp text</b></span>
@@ -65,6 +67,54 @@
         <span>Installs <b>0</b></span>
       </div>
     </div>
+   </div>
+
+    <section id="about" class="about">
+      <div class="about-inner">
+        <h2 class="about-title">About</h2>
+        <p class="about-lede">Huddle is a simple way to sit down with friends over video, whether you're studying together or just talking.</p>
+
+        <div class="about-grid">
+          <div>
+            <h3>How it works</h3>
+            <p>Start a room and share the link. Whoever opens it joins your call. There are no accounts and nothing to install.</p>
+            <p>Calls travel directly between your browsers. When a network won't allow that, an encrypted relay carries the call instead.</p>
+          </div>
+
+          <div>
+            <h3>What stays private</h3>
+            <ul>
+              <li>Your mic and camera are off when you join. Nothing is captured until you switch them on.</li>
+              <li>Calls aren't recorded and chat isn't saved. When the call ends, it's gone.</li>
+              <li>Files you share go to the people in the room and aren't stored on any server.</li>
+              <li>Audio and video are encrypted between browsers. The services that help calls connect can't see or hear them.</li>
+              <li>Your name and settings are remembered in your own browser, not on a server.</li>
+            </ul>
+          </div>
+
+          <div>
+            <h3>In a call</h3>
+            <ul>
+              <li>Screen sharing tuned for sharp text</li>
+              <li>Chat with files and images</li>
+              <li>A host who can mute people and manage the room</li>
+              <li>Mute or hide anyone just for yourself</li>
+              <li>Quality settings for slow connections</li>
+              <li>A noise filter for fans, traffic and typing</li>
+              <li>The live delay to each person, shown on their tile</li>
+            </ul>
+          </div>
+
+          <div>
+            <h3>Good to know</h3>
+            <p>Huddle works best with up to about six people. Everyone connects to everyone, so larger rooms get heavy.</p>
+            <p>Huddle is a personal project. You can read its code on <a href="https://github.com/DhruvKhemka1/huddle" target="_blank" rel="noopener">GitHub</a>.</p>
+          </div>
+        </div>
+
+        <a class="link" href="#landing">Back to the top</a>
+      </div>
+    </section>
   </main>
 
   <!-- Room -->
@@ -186,7 +236,7 @@
     <button id="askNo" class="link dim">Not now</button>
   </div>
   <div id="toast" class="toast" hidden></div>
-  <script src="fx.js?v=8"></script>
-  <script src="app.js?v=8"></script>
+  <script src="fx.js?v=11"></script>
+  <script src="app.js?v=11"></script>
 </body>
 </html>
